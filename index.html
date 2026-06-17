@@ -271,21 +271,57 @@ function setStatus(msg, isError){
   }
 }
 
-async function loadEntries(){
+function hasClaudeStorage(){
+  return typeof window.storage !== 'undefined' && window.storage && typeof window.storage.get === 'function';
+}
+
+// Uses Claude's built-in persistent storage when this runs inside a Claude.ai
+// artifact. Falls back to the browser's own localStorage when this file is
+// opened standalone (e.g. hosted on GitHub Pages) so entries still survive
+// a refresh there.
+async function storageGetRaw(key){
+  if(hasClaudeStorage()){
+    try{
+      const res = await window.storage.get(key, false);
+      return res && res.value ? res.value : null;
+    }catch(err){
+      return null;
+    }
+  }
   try{
-    const res = await window.storage.get(STORAGE_KEY, false);
-    return res && res.value ? JSON.parse(res.value) : [];
+    return localStorage.getItem(key);
+  }catch(err){
+    return null;
+  }
+}
+async function storageSetRaw(key, value){
+  if(hasClaudeStorage()){
+    try{
+      const res = await window.storage.set(key, value, false);
+      return !!res;
+    }catch(err){
+      return false;
+    }
+  }
+  try{
+    localStorage.setItem(key, value);
+    return true;
+  }catch(err){
+    return false;
+  }
+}
+
+async function loadEntries(){
+  const raw = await storageGetRaw(STORAGE_KEY);
+  try{
+    return raw ? JSON.parse(raw) : [];
   }catch(err){
     return [];
   }
 }
 async function persist(){
-  try{
-    const res = await window.storage.set(STORAGE_KEY, JSON.stringify(entries), false);
-    if(!res){ setStatus('Could not save. Try again.', true); }
-  }catch(err){
-    setStatus('Could not save. Try again.', true);
-  }
+  const ok = await storageSetRaw(STORAGE_KEY, JSON.stringify(entries));
+  if(!ok){ setStatus('Could not save. Try again.', true); }
 }
 
 function renderLatest(){
