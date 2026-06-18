@@ -17,6 +17,8 @@
     --systolic:#C1554D;
     --diastolic:#3A6B6B;
     --normal:#5C7A52;
+    --normal2:#7C9A5E;
+    --optimal:#3F5C39;
     --elevated:#C99A3E;
     --stage1:#C1754D;
     --stage2:#B5483F;
@@ -43,6 +45,19 @@
     font-family:'Fraunces',serif;font-weight:600;font-size:30px;
     margin:0;letter-spacing:-0.01em;
   }
+  .guideline-row{margin-top:18px;}
+  .guideline-label{
+    font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--ink-soft);margin:0 0 6px;
+  }
+  .guideline-toggle{display:flex;gap:6px;}
+  .gl-btn{
+    flex:1;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.02em;
+    padding:9px 6px;border-radius:9px;border:1px solid var(--line);background:#FBFAF7;
+    color:var(--ink-soft);cursor:pointer;text-align:center;
+  }
+  .gl-btn.active{background:var(--ink);color:#F7F4EE;border-color:var(--ink);}
+  .guideline-caption{font-size:11px;color:var(--ink-soft);margin:8px 0 0;line-height:1.45;}
   .card{
     background:var(--card);border:1px solid var(--line);
     border-radius:var(--radius);padding:20px;margin-bottom:16px;
@@ -87,7 +102,17 @@
     display:inline-block;font-family:'JetBrains Mono',monospace;font-size:11px;
     letter-spacing:.04em;padding:4px 10px;border-radius:100px;color:#fff;margin-bottom:14px;
   }
-  .gauge{position:relative;height:10px;border-radius:6px;display:flex;margin:18px 0 8px;}
+  .gauge-group{margin-top:16px;}
+  .gauge-group:first-of-type{margin-top:18px;}
+  .gauge-title{
+    display:flex;justify-content:space-between;align-items:baseline;
+    font-family:'JetBrains Mono',monospace;font-size:11px;text-transform:uppercase;
+    letter-spacing:.06em;color:var(--ink-soft);margin:0 0 6px;
+  }
+  .gauge-title .gauge-value{
+    text-transform:none;letter-spacing:0;color:var(--ink);font-weight:600;font-size:12px;
+  }
+  .gauge{position:relative;height:10px;border-radius:6px;display:flex;}
   .gauge .seg:first-child{border-radius:6px 0 0 6px;}
   .gauge .seg:last-child{border-radius:0 6px 6px 0;}
   .gauge .marker{
@@ -97,10 +122,10 @@
   }
   .gauge-labels{
     display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;
-    font-size:10px;color:var(--ink-soft);
+    font-size:10px;color:var(--ink-soft);margin-top:2px;
   }
   .cat-explainer{
-    font-size:12.5px;color:var(--ink-soft);line-height:1.5;margin:12px 0 0;
+    font-size:12.5px;color:var(--ink-soft);line-height:1.5;margin:14px 0 0;
   }
   canvas{display:block;width:100%;}
   .chart-legend{display:flex;gap:16px;margin-top:10px;font-size:12px;color:var(--ink-soft);}
@@ -138,6 +163,14 @@
   <header class="head">
     <p class="eyebrow" id="todayLabel">—</p>
     <h1>Pressure Log</h1>
+    <div class="guideline-row">
+      <p class="guideline-label">Guideline</p>
+      <div class="guideline-toggle" role="group" aria-label="Blood pressure guideline">
+        <button class="gl-btn" data-gl="aha" id="glAha">AHA / ACC (US)</button>
+        <button class="gl-btn" data-gl="esc" id="glEsc">ESC / ESH (Intl)</button>
+      </div>
+      <p class="guideline-caption">Defaults to ESC/ESH, closer to what's typically used in Indonesia and most countries outside the US. Switch to AHA/ACC if your doctor follows the US standard instead — either way, only the categorization changes, not the numbers you log.</p>
+    </div>
   </header>
 
   <section class="card">
@@ -188,7 +221,7 @@
     <button class="export-link" id="exportBtn" style="display:none;">Export as CSV</button>
   </section>
 
-  <footer class="note">Categories follow standard AHA blood pressure ranges and are for tracking only — not a diagnosis. Bring this log to your doctor for context on your numbers.</footer>
+  <footer class="note">Categories follow the selected guideline's published blood pressure ranges and are for tracking only — not a diagnosis. Bring this log to your doctor for context on your numbers.</footer>
 </div>
 
 <script>
@@ -232,55 +265,116 @@ function byTsAsc(a, b){
   return d !== 0 ? d : (a.createdAt||0) - (b.createdAt||0);
 }
 
-function sysCategory(sys){
-  if(sys>=180) return 4;
-  if(sys>=140) return 3;
-  if(sys>=130) return 2;
-  if(sys>=120) return 1;
+// Each guideline is a list of tiers from lowest to highest. A reading's tier
+// is the highest one where systolic >= sysMin OR diastolic >= diaMin — this
+// cascading "OR" rule is how both AHA and ESC/ESH tables are meant to be read.
+// sysGauge/diaGauge describe the visual scale: domain (min/max shown), cuts
+// (the boundary values between tiers), and the tick labels under the bar.
+const GUIDELINES = {
+  aha: {
+    name: 'AHA / ACC (US, 2017)',
+    tiers: [
+      { label:'Normal', color:'var(--normal)', sysMin:-Infinity, diaMin:-Infinity,
+        explainer:'Within the normal range — keep up regular monitoring.' },
+      { label:'Elevated', color:'var(--elevated)', sysMin:120, diaMin:Infinity,
+        explainer:'Above normal but not yet Stage 1 — often a cue to look at salt intake, activity, and stress.' },
+      { label:'Stage 1', color:'var(--stage1)', sysMin:130, diaMin:80,
+        explainer:'Meets the Stage 1 threshold. Commonly addressed with lifestyle changes first, with medication depending on overall risk.' },
+      { label:'Stage 2', color:'var(--stage2)', sysMin:140, diaMin:90,
+        explainer:'Meets the Stage 2 threshold. Guidelines typically call for medication alongside lifestyle changes.' },
+      { label:'Hypertensive Crisis', color:'var(--crisis)', sysMin:180, diaMin:120,
+        explainer:'This range warrants prompt medical attention, especially with symptoms like chest pain, breathlessness, or vision changes.' }
+    ],
+    sysGauge:{ domain:[90,200], cuts:[120,130,140,180], labels:['90','120','140','180','200+'] },
+    diaGauge:{ domain:[50,130], cuts:[80,90,120], labels:['50','80','90','120','130+'] }
+  },
+  esc: {
+    name: 'ESC / ESH (Europe, 2018/2023 — widely used internationally)',
+    tiers: [
+      { label:'Optimal', color:'var(--optimal)', sysMin:-Infinity, diaMin:-Infinity,
+        explainer:'A well-controlled, low-risk range.' },
+      { label:'Normal', color:'var(--normal2)', sysMin:120, diaMin:80,
+        explainer:'Within the normal range — keep up regular monitoring.' },
+      { label:'High-normal', color:'var(--elevated)', sysMin:130, diaMin:85,
+        explainer:'Above normal but below Grade 1 — often a cue to look at salt intake, activity, and stress.' },
+      { label:'Grade 1', color:'var(--stage1)', sysMin:140, diaMin:90,
+        explainer:'Meets the Grade 1 hypertension threshold (the same ≥140/90 cutoff the WHO and ISH also use to diagnose hypertension). Often managed with lifestyle changes first, with medication depending on overall risk.' },
+      { label:'Grade 2', color:'var(--stage2)', sysMin:160, diaMin:100,
+        explainer:'Meets the Grade 2 hypertension threshold. Guidelines typically call for prompt medication alongside lifestyle changes.' },
+      { label:'Grade 3', color:'var(--crisis)', sysMin:180, diaMin:110,
+        explainer:'This range warrants prompt medical attention, especially with symptoms like chest pain, breathlessness, or vision changes.' }
+    ],
+    sysGauge:{ domain:[90,200], cuts:[120,130,140,160,180], labels:['90','120','140','160','180','200+'] },
+    diaGauge:{ domain:[50,130], cuts:[80,85,90,100,110], labels:['50','80','90','100','110','130+'] }
+  }
+};
+let currentGuideline = 'esc';
+const GUIDELINE_KEY = 'guideline';
+
+function tierIndex(tiers, sys, dia){
+  for(let i=tiers.length-1;i>=1;i--){
+    if(sys>=tiers[i].sysMin || dia>=tiers[i].diaMin) return i;
+  }
   return 0;
 }
-function diaCategory(dia){
-  if(dia>=120) return 4;
-  if(dia>=90) return 3;
-  if(dia>=80) return 2;
+function tierIndexSysOnly(tiers, sys){
+  for(let i=tiers.length-1;i>=1;i--){
+    if(sys>=tiers[i].sysMin) return i;
+  }
   return 0;
 }
-function combinedCategory(sys, dia){
-  const labels = ['Normal','Elevated','Stage 1','Stage 2','Hypertensive Crisis'];
-  const colors = ['var(--normal)','var(--elevated)','var(--stage1)','var(--stage2)','var(--crisis)'];
-  const explainers = [
-    'Within the normal range — keep up regular monitoring.',
-    'Above normal but not yet Stage 1 — often a cue to look at salt intake, activity, and stress.',
-    'Meets the Stage 1 threshold. Commonly addressed with lifestyle changes first, with medication depending on overall risk.',
-    'Meets the Stage 2 threshold. Guidelines typically call for medication alongside lifestyle changes.',
-    'This range warrants prompt medical attention, especially with symptoms like chest pain, breathlessness, or vision changes.'
-  ];
-  const sc = sysCategory(sys), dc = diaCategory(dia);
-  const overall = Math.max(sc, dc);
-  const note = (overall>0 && dc>sc) ? ' · diastolic' : '';
-  return { label: labels[overall], color: colors[overall], note, explainer: explainers[overall] };
+function tierIndexDiaOnly(tiers, dia){
+  for(let i=tiers.length-1;i>=1;i--){
+    if(dia>=tiers[i].diaMin) return i;
+  }
+  return 0;
 }
 
-function gaugeHtml(sys){
-  const min=90, max=200;
-  const pct = Math.min(100, Math.max(0, (sys-min)/(max-min)*100));
-  const widths = [
-    {to:120, color:'var(--normal)'},
-    {to:130, color:'var(--elevated)'},
-    {to:140, color:'var(--stage1)'},
-    {to:180, color:'var(--stage2)'},
-    {to:200, color:'var(--crisis)'}
-  ];
+function combinedCategory(sys, dia){
+  const g = GUIDELINES[currentGuideline];
+  const idx = tierIndex(g.tiers, sys, dia);
+  const sIdx = tierIndexSysOnly(g.tiers, sys);
+  const dIdx = tierIndexDiaOnly(g.tiers, dia);
+  const tier = g.tiers[idx];
+  const note = (idx>0 && dIdx>sIdx) ? ' · diastolic' : '';
+  const driverLine = note ? ' This is being driven by your diastolic number — diastolic alone can push the category up even when systolic looks fine.' : '';
+  return { label: tier.label, color: tier.color, note, explainer: tier.explainer + driverLine };
+}
+
+function buildSegments(cuts, max, tiers){
+  const boundaries = [...cuts, max];
+  return boundaries.map((b,i) => ({ to:b, color: tiers[i].color }));
+}
+
+function gaugeGroupHtml(title, value, domain, segments, labels){
+  const [min, max] = domain;
+  const pct = Math.min(100, Math.max(0, (value-min)/(max-min)*100));
   let from = min, segHtml = '';
-  widths.forEach(seg => {
+  segments.forEach(seg => {
     const w = (seg.to-from)/(max-min)*100;
     segHtml += `<div class="seg" style="width:${w}%;background:${seg.color}"></div>`;
     from = seg.to;
   });
+  const labelsHtml = labels.map(l => `<span>${l}</span>`).join('');
   return `
-    <div class="gauge">${segHtml}<div class="marker" style="left:${pct}%"></div></div>
-    <div class="gauge-labels"><span>90</span><span>120</span><span>140</span><span>180</span><span>200+</span></div>
+    <div class="gauge-group">
+      <p class="gauge-title">${title} <span class="gauge-value">${value} mmHg</span></p>
+      <div class="gauge">${segHtml}<div class="marker" style="left:${pct}%"></div></div>
+      <div class="gauge-labels">${labelsHtml}</div>
+    </div>
   `;
+}
+
+// Systolic and diastolic use different thresholds in every guideline, so
+// they get separate scales rather than one shared bar — e.g. a diastolic of
+// 90 alone is already Stage 2 (AHA) / Grade 1 (ESC), even though 90 sits in
+// the "normal" part of the systolic scale.
+function gaugesHtml(sys, dia){
+  const g = GUIDELINES[currentGuideline];
+  const sysSegs = buildSegments(g.sysGauge.cuts, g.sysGauge.domain[1], g.tiers);
+  const diaSegs = buildSegments(g.diaGauge.cuts, g.diaGauge.domain[1], g.tiers);
+  return gaugeGroupHtml('Systolic', sys, g.sysGauge.domain, sysSegs, g.sysGauge.labels)
+       + gaugeGroupHtml('Diastolic', dia, g.diaGauge.domain, diaSegs, g.diaGauge.labels);
 }
 
 function setStatus(msg, isError){
@@ -360,7 +454,7 @@ function renderLatest(){
     </div>
     <p class="latest-meta">${dayLabel(latest.ts)} · ${timeLabel(latest.ts)}${latest.pulse ? ' · ' + latest.pulse + ' bpm' : ''}</p>
     <span class="badge" style="background:${cat.color}">${cat.label}${cat.note}</span>
-    ${gaugeHtml(latest.sys)}
+    ${gaugesHtml(latest.sys, latest.dia)}
     <p class="cat-explainer">${cat.explainer}</p>
   `;
 }
@@ -440,7 +534,7 @@ function renderHistory(){
         <span class="entry-dot" style="background:${cat.color}"></span>
         <div class="entry-main">
           <div class="entry-vals">${e.sys}/${e.dia}${e.pulse ? ' <span style="color:var(--ink-soft);font-weight:400;">· ' + e.pulse + ' bpm</span>' : ''}</div>
-          <div class="entry-sub">${timeLabel(e.ts)} · ${cat.label}</div>
+          <div class="entry-sub">${timeLabel(e.ts)} · ${cat.label}${cat.note}</div>
           ${e.note ? `<div class="entry-note">${escapeHtml(e.note)}</div>` : ''}
         </div>
         <button class="entry-del" data-id="${e.id}">Delete</button>
@@ -459,6 +553,7 @@ function renderAll(){
 
 function exportCsv(){
   if(entries.length===0) return;
+  const g = GUIDELINES[currentGuideline];
   const rows = [['Date','Time','Systolic','Diastolic','Pulse','Category','Note']];
   [...entries].sort(byTsAsc).forEach(e => {
     const cat = combinedCategory(e.sys, e.dia);
@@ -470,7 +565,7 @@ function exportCsv(){
       (e.note || '').replace(/,/g,';')
     ]);
   });
-  const csv = rows.map(r => r.join(',')).join('\n');
+  const csv = `Guideline,${g.name}\n\n` + rows.map(r => r.join(',')).join('\n');
   const blob = new Blob([csv], {type:'text/csv'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -548,11 +643,29 @@ function bindEvents(){
     }
   });
   window.addEventListener('resize', debounce(renderChart, 200));
+  document.querySelectorAll('.gl-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if(btn.dataset.gl === currentGuideline) return;
+      currentGuideline = btn.dataset.gl;
+      syncGuidelineButtons();
+      await storageSetRaw(GUIDELINE_KEY, currentGuideline);
+      renderAll();
+    });
+  });
+}
+
+function syncGuidelineButtons(){
+  document.querySelectorAll('.gl-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.gl === currentGuideline);
+  });
 }
 
 async function init(){
   document.getElementById('whenInput').value = toLocalInputValue(new Date());
   document.getElementById('todayLabel').textContent = new Date().toLocaleDateString(undefined,{weekday:'long', month:'long', day:'numeric'});
+  const savedGl = await storageGetRaw(GUIDELINE_KEY);
+  currentGuideline = savedGl === 'aha' ? 'aha' : 'esc';
+  syncGuidelineButtons();
   entries = await loadEntries();
   renderAll();
   bindEvents();
