@@ -99,6 +99,9 @@
     display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;
     font-size:10px;color:var(--ink-soft);
   }
+  .cat-explainer{
+    font-size:12.5px;color:var(--ink-soft);line-height:1.5;margin:12px 0 0;
+  }
   canvas{display:block;width:100%;}
   .chart-legend{display:flex;gap:16px;margin-top:10px;font-size:12px;color:var(--ink-soft);}
   .chart-legend span{display:inline-flex;align-items:center;gap:6px;}
@@ -217,6 +220,17 @@ function debounce(fn, ms){
   let t;
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
 }
+// Sort by reading time; if two readings share the same logged time, the one
+// entered more recently wins. Older entries saved before this field existed
+// fall back to 0 and simply keep their time-based order.
+function byTsDesc(a, b){
+  const d = new Date(b.ts) - new Date(a.ts);
+  return d !== 0 ? d : (b.createdAt||0) - (a.createdAt||0);
+}
+function byTsAsc(a, b){
+  const d = new Date(a.ts) - new Date(b.ts);
+  return d !== 0 ? d : (a.createdAt||0) - (b.createdAt||0);
+}
 
 function sysCategory(sys){
   if(sys>=180) return 4;
@@ -234,10 +248,17 @@ function diaCategory(dia){
 function combinedCategory(sys, dia){
   const labels = ['Normal','Elevated','Stage 1','Stage 2','Hypertensive Crisis'];
   const colors = ['var(--normal)','var(--elevated)','var(--stage1)','var(--stage2)','var(--crisis)'];
+  const explainers = [
+    'Within the normal range — keep up regular monitoring.',
+    'Above normal but not yet Stage 1 — often a cue to look at salt intake, activity, and stress.',
+    'Meets the Stage 1 threshold. Commonly addressed with lifestyle changes first, with medication depending on overall risk.',
+    'Meets the Stage 2 threshold. Guidelines typically call for medication alongside lifestyle changes.',
+    'This range warrants prompt medical attention, especially with symptoms like chest pain, breathlessness, or vision changes.'
+  ];
   const sc = sysCategory(sys), dc = diaCategory(dia);
   const overall = Math.max(sc, dc);
   const note = (overall>0 && dc>sc) ? ' · diastolic' : '';
-  return { label: labels[overall], color: colors[overall], note };
+  return { label: labels[overall], color: colors[overall], note, explainer: explainers[overall] };
 }
 
 function gaugeHtml(sys){
@@ -330,7 +351,7 @@ function renderLatest(){
     el.innerHTML = '<p class="latest-empty">No readings yet — log your first one above.</p>';
     return;
   }
-  const sorted = [...entries].sort((a,b) => new Date(b.ts) - new Date(a.ts));
+  const sorted = [...entries].sort(byTsDesc);
   const latest = sorted[0];
   const cat = combinedCategory(latest.sys, latest.dia);
   el.innerHTML = `
@@ -340,6 +361,7 @@ function renderLatest(){
     <p class="latest-meta">${dayLabel(latest.ts)} · ${timeLabel(latest.ts)}${latest.pulse ? ' · ' + latest.pulse + ' bpm' : ''}</p>
     <span class="badge" style="background:${cat.color}">${cat.label}${cat.note}</span>
     ${gaugeHtml(latest.sys)}
+    <p class="cat-explainer">${cat.explainer}</p>
   `;
 }
 
@@ -347,7 +369,7 @@ function renderChart(){
   const card = document.getElementById('chartCard');
   if(entries.length<2){ card.style.display='none'; return; }
   card.style.display='block';
-  const sorted = [...entries].sort((a,b) => new Date(a.ts) - new Date(b.ts)).slice(-30);
+  const sorted = [...entries].sort(byTsAsc).slice(-30);
   const canvas = document.getElementById('trendCanvas');
   const dpr = window.devicePixelRatio || 1;
   const cssWidth = canvas.parentElement.clientWidth - 40;
@@ -407,7 +429,7 @@ function renderHistory(){
     exportBtn.style.display = 'none';
     return;
   }
-  const sorted = [...entries].sort((a,b) => new Date(b.ts) - new Date(a.ts));
+  const sorted = [...entries].sort(byTsDesc);
   let html = '', lastLabel = null;
   sorted.forEach(e => {
     const lbl = dayLabel(e.ts);
@@ -438,7 +460,7 @@ function renderAll(){
 function exportCsv(){
   if(entries.length===0) return;
   const rows = [['Date','Time','Systolic','Diastolic','Pulse','Category','Note']];
-  [...entries].sort((a,b) => new Date(a.ts) - new Date(b.ts)).forEach(e => {
+  [...entries].sort(byTsAsc).forEach(e => {
     const cat = combinedCategory(e.sys, e.dia);
     rows.push([
       new Date(e.ts).toLocaleDateString(),
@@ -488,7 +510,7 @@ async function handleSave(){
   const ts = whenInput.value ? new Date(whenInput.value).toISOString() : new Date().toISOString();
   const entry = {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2,7),
-    ts, sys, dia, pulse,
+    ts, createdAt: Date.now(), sys, dia, pulse,
     note: noteInput.value.trim()
   };
   entries.push(entry);
