@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+          <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -19,6 +19,7 @@
     --normal:#5C7A52;
     --normal2:#7C9A5E;
     --optimal:#3F5C39;
+    --hypo:#5B7A9A;
     --elevated:#C99A3E;
     --stage1:#C1754D;
     --stage2:#B5483F;
@@ -274,7 +275,9 @@ const GUIDELINES = {
   aha: {
     name: 'AHA / ACC (US, 2017)',
     tiers: [
-      { label:'Normal', color:'var(--normal)', sysMin:-Infinity, diaMin:-Infinity,
+      { label:'Hypotension', color:'var(--hypo)', sysMax:90, diaMax:60,
+        explainer:'Below the normal range (systolic <90 or diastolic <60). Can cause dizziness, fainting, or fatigue. Worth mentioning to your doctor, especially if you have symptoms.' },
+      { label:'Normal', color:'var(--normal)', sysMin:90, diaMin:60,
         explainer:'Within the normal range — keep up regular monitoring.' },
       { label:'Elevated', color:'var(--elevated)', sysMin:120, diaMin:Infinity,
         explainer:'Above normal but not yet Stage 1 — often a cue to look at salt intake, activity, and stress.' },
@@ -285,13 +288,15 @@ const GUIDELINES = {
       { label:'Hypertensive Crisis', color:'var(--crisis)', sysMin:180, diaMin:120,
         explainer:'This range warrants prompt medical attention, especially with symptoms like chest pain, breathlessness, or vision changes.' }
     ],
-    sysGauge:{ domain:[90,200], cuts:[120,130,140,180], labels:['90','120','140','180','200+'] },
-    diaGauge:{ domain:[50,130], cuts:[80,90,120], labels:['50','80','90','120','130+'] }
+    sysGauge:{ domain:[60,200], cuts:[90,120,130,140,180], labels:['60','90','120','140','180','200+'] },
+    diaGauge:{ domain:[40,130], cuts:[60,80,90,120], labels:['40','60','80','90','120','130+'] }
   },
   esc: {
     name: 'ESC / ESH (Europe, 2018/2023 — widely used internationally)',
     tiers: [
-      { label:'Optimal', color:'var(--optimal)', sysMin:-Infinity, diaMin:-Infinity,
+      { label:'Hypotension', color:'var(--hypo)', sysMax:90, diaMax:60,
+        explainer:'Below the normal range (systolic <90 or diastolic <60). Can cause dizziness, fainting, or fatigue. Worth mentioning to your doctor, especially if you have symptoms.' },
+      { label:'Optimal', color:'var(--optimal)', sysMin:90, diaMin:60,
         explainer:'A well-controlled, low-risk range.' },
       { label:'Normal', color:'var(--normal2)', sysMin:120, diaMin:80,
         explainer:'Within the normal range — keep up regular monitoring.' },
@@ -304,30 +309,40 @@ const GUIDELINES = {
       { label:'Grade 3', color:'var(--crisis)', sysMin:180, diaMin:110,
         explainer:'This range warrants prompt medical attention, especially with symptoms like chest pain, breathlessness, or vision changes.' }
     ],
-    sysGauge:{ domain:[90,200], cuts:[120,130,140,160,180], labels:['90','120','140','160','180','200+'] },
-    diaGauge:{ domain:[50,130], cuts:[80,85,90,100,110], labels:['50','80','90','100','110','130+'] }
+    sysGauge:{ domain:[60,200], cuts:[90,120,130,140,160,180], labels:['60','90','120','140','160','180','200+'] },
+    diaGauge:{ domain:[40,130], cuts:[60,80,85,90,100,110], labels:['40','60','80','90','100','110','130+'] }
   }
 };
 let currentGuideline = 'esc';
 const GUIDELINE_KEY = 'guideline';
 
+function isHypo(tier, sys, dia){
+  return tier.sysMax !== undefined && (sys < tier.sysMax || dia < tier.diaMax);
+}
 function tierIndex(tiers, sys, dia){
+  if(isHypo(tiers[0], sys, dia)) return 0;
+  for(let i=tiers.length-1;i>=2;i--){
+    if(sys>=tiers[i].sysMin || dia>=tiers[i].diaMin) return i;
+  }
+  // Check remaining normal-and-above tiers (index 1 onward)
   for(let i=tiers.length-1;i>=1;i--){
     if(sys>=tiers[i].sysMin || dia>=tiers[i].diaMin) return i;
   }
-  return 0;
+  return 1; // Normal/Optimal
 }
 function tierIndexSysOnly(tiers, sys){
+  if(tiers[0].sysMax !== undefined && sys < tiers[0].sysMax) return 0;
   for(let i=tiers.length-1;i>=1;i--){
-    if(sys>=tiers[i].sysMin) return i;
+    if(tiers[i].sysMin !== undefined && sys>=tiers[i].sysMin) return i;
   }
-  return 0;
+  return 1;
 }
 function tierIndexDiaOnly(tiers, dia){
+  if(tiers[0].diaMax !== undefined && dia < tiers[0].diaMax) return 0;
   for(let i=tiers.length-1;i>=1;i--){
-    if(dia>=tiers[i].diaMin) return i;
+    if(tiers[i].diaMin !== undefined && dia>=tiers[i].diaMin) return i;
   }
-  return 0;
+  return 1;
 }
 
 function combinedCategory(sys, dia){
@@ -336,11 +351,24 @@ function combinedCategory(sys, dia){
   const sIdx = tierIndexSysOnly(g.tiers, sys);
   const dIdx = tierIndexDiaOnly(g.tiers, dia);
   const tier = g.tiers[idx];
-  const note = (idx>0 && dIdx>sIdx) ? ' · diastolic' : '';
-  const driverLine = note ? ' This is being driven by your diastolic number — diastolic alone can push the category up even when systolic looks fine.' : '';
+  // For hypotension, note which value is low
+  let note = '';
+  if(idx === 0){
+    const sysLow = sys < g.tiers[0].sysMax, diaLow = dia < g.tiers[0].diaMax;
+    if(sysLow && diaLow) note = ' · systolic & diastolic';
+    else if(sysLow) note = ' · systolic';
+    else note = ' · diastolic';
+  } else {
+    note = (idx>1 && dIdx>sIdx) ? ' · diastolic' : '';
+  }
+  const driverLine = (idx>0 && note.includes('diastolic') && !note.includes('systolic'))
+    ? ' This is being driven by your diastolic number — diastolic alone can push the category up even when systolic looks fine.' : '';
   return { label: tier.label, color: tier.color, note, explainer: tier.explainer + driverLine };
 }
 
+// tiers[0] is Hypotension (its upper edge is sysMax/diaMax); tiers[1+] use sysMin.
+// The gauge cuts array already encodes all the boundaries, so we just zip with
+// tier colors — hypo gets index 0, then each cut increments the tier index.
 function buildSegments(cuts, max, tiers){
   const boundaries = [...cuts, max];
   return boundaries.map((b,i) => ({ to:b, color: tiers[i].color }));
